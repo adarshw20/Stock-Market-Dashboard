@@ -357,12 +357,12 @@ def main():
             st.markdown("### 📊 Key Metrics")
             
             metrics = {
-                "Market Cap": stock_info.get('marketCap', 'N/A'),
-                "P/E Ratio": stock_info.get('trailingPE', 'N/A'),
-                "52W High": stock_info.get('fiftyTwoWeekHigh', 'N/A'),
-                "52W Low": stock_info.get('fiftyTwoWeekLow', 'N/A'),
-                "Volume": stock_info.get('volume', 'N/A'),
-                "Avg Volume": stock_info.get('averageVolume', 'N/A')
+                "Market Cap": info.get('marketCap', 'N/A'),
+                "P/E Ratio": info.get('trailingPE', 'N/A'),
+                "52W High": info.get('fiftyTwoWeekHigh', 'N/A'),
+                "52W Low": info.get('fiftyTwoWeekLow', 'N/A'),
+                "Volume": info.get('volume', 'N/A'),
+                "Avg Volume": info.get('averageVolume', 'N/A')
             }
             
             for metric, value in metrics.items():
@@ -379,13 +379,13 @@ def main():
                 st.write(f"**{metric}:** {value}")
             
             # Company description
-            if 'longBusinessSummary' in stock_info:
+            if info and 'longBusinessSummary' in info and info['longBusinessSummary']:
                 st.markdown("### 📝 About")
-                summary = stock_info['longBusinessSummary'][:300] + "..." if len(stock_info['longBusinessSummary']) > 300 else stock_info['longBusinessSummary']
+                summary = info['longBusinessSummary'][:300] + "..." if len(info['longBusinessSummary']) > 300 else info['longBusinessSummary']
                 st.write(summary)
     
     # Technical Analysis Section
-    if stock_data is not None and not stock_data.empty:
+    if data is not None and not data.empty:
         st.markdown("---")
         st.markdown("## 🔍 Technical Analysis")
         
@@ -393,17 +393,17 @@ def main():
         
         with col1:
             # RSI
-            if 'RSI' in stock_data.columns:
-                latest_rsi = stock_data['RSI'].iloc[-1]
+            if 'RSI' in data.columns:
+                latest_rsi = data['RSI'].iloc[-1]
                 if not np.isnan(latest_rsi):
                     rsi_color = "green" if 30 <= latest_rsi <= 70 else "orange" if latest_rsi > 70 else "red"
                     st.markdown(f"**RSI (14):** <span style='color:{rsi_color}'>{latest_rsi:.2f}</span>", unsafe_allow_html=True)
         
         with col2:
             # Price vs SMA
-            if 'SMA_20' in stock_data.columns:
-                current_price = stock_data['Close'].iloc[-1]
-                sma_20 = stock_data['SMA_20'].iloc[-1]
+            if 'SMA_20' in data.columns:
+                current_price = data['Close'].iloc[-1]
+                sma_20 = data['SMA_20'].iloc[-1]
                 if not np.isnan(sma_20):
                     trend = "Above" if current_price > sma_20 else "Below"
                     trend_color = "green" if trend == "Above" else "red"
@@ -411,8 +411,8 @@ def main():
         
         with col3:
             # Volume trend
-            avg_volume = stock_data['Volume'].tail(20).mean()
-            current_volume = stock_data['Volume'].iloc[-1]
+            avg_volume = data['Volume'].tail(20).mean()
+            current_volume = data['Volume'].iloc[-1]
             volume_trend = "High" if current_volume > avg_volume * 1.5 else "Normal"
             volume_color = "orange" if volume_trend == "High" else "blue"
             st.markdown(f"**Volume:** <span style='color:{volume_color}'>{volume_trend}</span>", unsafe_allow_html=True)
