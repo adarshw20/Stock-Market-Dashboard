@@ -78,17 +78,57 @@ COMPANIES = {
     "IBM Corporation": "IBM"
 }
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
+import time
+from datetime import datetime, timedelta
+
+# Cache data for 15 minutes to reduce API calls
+@st.cache_data(ttl=900)  # 15 minutes cache
+@st.cache_resource(ttl=900)  # Cache the Ticker object
+
 def fetch_stock_data(ticker, period="1y"):
-    """Fetch stock data from Yahoo Finance"""
-    try:
-        stock = yf.Ticker(ticker)
-        data = stock.history(period=period)
-        info = stock.info
-        return data, info
-    except Exception as e:
-        st.error(f"Error fetching data for {ticker}: {str(e)}")
-        return None, None
+    """Fetch stock data from Yahoo Finance with rate limiting and retries"""
+    max_retries = 3
+    retry_delay = 5  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            # Add a small delay between API calls
+            time.sleep(1)
+            
+            # Create a Ticker object with a custom session
+            session = yf.Ticker(ticker, session=None)
+            
+            # Fetch data with a timeout
+            data = session.history(period=period, timeout=10)
+            
+            # Only fetch info if data was successfully retrieved
+            if data is not None and not data.empty:
+                # Get only the most essential info to reduce API calls
+                info = {
+                    'shortName': session.info.get('shortName', ticker),
+                    'marketCap': session.info.get('marketCap'),
+                    'regularMarketPrice': session.info.get('regularMarketPrice'),
+                    'previousClose': session.info.get('previousClose'),
+                    'regularMarketChange': session.info.get('regularMarketChange'),
+                    'regularMarketChangePercent': session.info.get('regularMarketChangePercent'),
+                    'fiftyTwoWeekHigh': session.info.get('fiftyTwoWeekHigh'),
+                    'fiftyTwoWeekLow': session.info.get('fiftyTwoWeekLow'),
+                    'volume': session.info.get('volume'),
+                    'averageVolume': session.info.get('averageVolume'),
+                    'trailingPE': session.info.get('trailingPE'),
+                    'dividendYield': session.info.get('dividendYield')
+                }
+                return data, info
+                
+        except Exception as e:
+            if attempt == max_retries - 1:  # Last attempt
+                st.error(f"Failed to fetch data for {ticker} after {max_retries} attempts. Error: {str(e)}")
+                return None, None
+            
+            # Wait before retrying
+            time.sleep(retry_delay * (attempt + 1))
+    
+    return None, None
 
 def calculate_technical_indicators(data):
     """Calculate basic technical indicators"""
@@ -182,15 +222,22 @@ def main():
     # Main header
     st.markdown('<h1 class="main-header">📈 Stock Market Dashboard</h1>', unsafe_allow_html=True)
     
+    # Display a warning about rate limits
+    st.warning("""
+    **Note on Rate Limits**: This app uses Yahoo Finance's free API which has rate limits. 
+    If you see rate limit errors, please wait a few minutes before making new requests.
+    """)
+    
     # Sidebar
     with st.sidebar:
         st.markdown('<div class="sidebar-header">🏢 Select Company</div>', unsafe_allow_html=True)
         
-        # Company selection
+        # Company selection with a note about rate limits
         selected_company = st.selectbox(
             "Choose a company:",
             list(COMPANIES.keys()),
-            index=0
+            index=0,
+            help="Frequent changes may trigger rate limits"
         )
         
         # Time period selection
@@ -198,13 +245,28 @@ def main():
         time_period = st.selectbox(
             "Select period:",
             ["1mo", "3mo", "6mo", "1y", "2y", "5y"],
-            index=3
+            index=3,
+            help="Longer periods may take more time to load"
         )
         
-        # Refresh button
-        if st.button("🔄 Refresh Data"):
-            st.cache_data.clear()
-            st.rerun()
+        # Add a cooldown period indicator
+        last_refresh = st.session_state.get('last_refresh', 0)
+        current_time = time.time()
+        cooldown = 10  # seconds
+        
+        # Refresh button with cooldown
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            if st.button("🔄 Refresh Data", disabled=(current_time - last_refresh < cooldown)):
+                st.session_state.last_refresh = current_time
+                st.cache_data.clear()
+                st.rerun()
+        
+        # Show cooldown status
+        with col2:
+            if current_time - last_refresh < cooldown:
+                remaining = int(cooldown - (current_time - last_refresh))
+                st.caption(f"⏳ Cooldown: {remaining}s")
         
         st.markdown("---")
         st.markdown("""
@@ -223,37 +285,59 @@ def main():
     # Get ticker symbol
     ticker = COMPANIES[selected_company]
     
+    # Display loading state
+    with st.spinner(f"Fetching {selected_company} data..."):
+        # Add a small delay to prevent rapid successive requests
+        time.sleep(1.5)
+        
+        # Try to fetch data with retries
+        data, info = fetch_stock_data(ticker, time_period)
+        
+        # If data fetching failed, show error and cached data if available
+        if data is None or data.empty or info is None:
+            st.error("⚠️ Failed to fetch fresh data. Showing cached data if available...")
+            
+            # Try to get cached data
+            cache_key = f"{ticker}_{time_period}"
+            cached_data = st.session_state.get(cache_key)
+            
+            if cached_data and 'data' in cached_data and 'info' in cached_data:
+                data, info = cached_data['data'], cached_data['info']
+                st.warning("Showing cached data from previous successful fetch.")
+            else:
+                st.error("❌ No cached data available. Please try again later.")
+                st.info("""
+                **Troubleshooting Tips:**
+                - Wait a few minutes and try again (Yahoo Finance has rate limits)
+                - Check your internet connection
+                - Try selecting a different time period or company
+                - The service might be temporarily unavailable
+                """)
+                return
+    
     # Create main content area
     col1, col2 = st.columns([3, 1])
     
     with col1:
-        # Loading indicator
-        with st.spinner(f"Loading data for {selected_company}..."):
-            stock_data, stock_info = fetch_stock_data(ticker, time_period)
+        # Calculate technical indicators
+        data = calculate_technical_indicators(data)
         
-        if stock_data is not None and not stock_data.empty:
-            # Calculate technical indicators
-            stock_data = calculate_technical_indicators(stock_data)
-            
-            # Main price chart
-            candlestick_fig = create_candlestick_chart(stock_data, selected_company)
-            st.plotly_chart(candlestick_fig, use_container_width=True)
-            
-            # Volume chart
-            volume_fig = create_volume_chart(stock_data)
-            st.plotly_chart(volume_fig, use_container_width=True)
-            
-        else:
-            st.error("Unable to fetch stock data. Please try again later.")
+        # Main price chart
+        candlestick_fig = create_candlestick_chart(data, selected_company)
+        st.plotly_chart(candlestick_fig, use_container_width=True)
+        
+        # Volume chart
+        volume_fig = create_volume_chart(data)
+        st.plotly_chart(volume_fig, use_container_width=True)
     
     with col2:
-        if stock_info:
+        if info:
             # Company information
             st.markdown("### 🏢 Company Info")
             
-            # Current price and change
-            current_price = stock_info.get('currentPrice', 'N/A')
-            previous_close = stock_info.get('previousClose', 'N/A')
+            # Get price information
+            current_price = info.get('regularMarketPrice', 'N/A')
+            previous_close = info.get('previousClose', 'N/A')
             
             if current_price != 'N/A' and previous_close != 'N/A':
                 price_change = current_price - previous_close
